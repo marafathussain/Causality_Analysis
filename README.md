@@ -30,6 +30,58 @@ The approach is based on **Do-calculus via modeling** — a practical compromise
 
 5. **Aggregate across subjects and CV folds**: Report mean causal effects with confidence intervals and statistical significance.
 
+### How aggregation, confidence intervals, and significance testing work
+
+The goal is to get a **stable, trustworthy estimate** of each feature's causal effect, not one that depends on a lucky/unlucky train-test split.
+
+**Step A — Collect one effect estimate per CV fold:**
+
+The data is split into K folds (default K=5). In each fold:
+- The outcome model and conditional model are trained on K-1 folds.
+- For each test subject, we sample K counterfactual values of feature F_i, compute how much the predicted outcome changes per unit change in the feature (ΔO/ΔF for regression, ΔP/ΔF for classification), and average these within the subject.
+- The mean across all test subjects in that fold gives **one effect estimate for that fold**.
+
+After all folds, we have K numbers (one per fold) representing the causal effect of feature F_i:
+
+```
+effects = [effect_fold1, effect_fold2, ..., effect_foldK]
+```
+
+**Step B — Compute the mean effect:**
+
+```
+mean_effect = average(effects)
+```
+
+This is the reported "causal effect" — positive means increasing the feature increases the outcome, negative means it decreases it.
+
+**Step C — Compute the confidence interval:**
+
+We use the t-distribution (appropriate for small K) to compute a 95% confidence interval:
+
+```
+SE = standard_error(effects)                    # std(effects) / sqrt(K)
+t_critical = t_distribution(0.975, df=K-1)      # two-tailed, 95%
+CI = [mean_effect - t_critical * SE, mean_effect + t_critical * SE]
+```
+
+If the CI does not contain zero, the effect is likely real and not due to random variation across folds.
+
+**Step D — Statistical significance (one-sample t-test):**
+
+We test the null hypothesis H₀: "the true causal effect is zero" using a one-sample t-test:
+
+```
+t_statistic = mean_effect / SE
+p_value = two-tailed probability of observing t_statistic under H₀
+```
+
+- **p < 0.05** → statistically significant (we reject "no effect")
+- **p < 0.01** → highly significant
+- **p < 0.001** → very highly significant
+
+**Why this works:** If a feature is truly causal, perturbing it will consistently change the outcome across ALL folds, giving a mean far from zero and a small p-value. If a feature is merely correlated (spurious), the effect will be inconsistent across folds (sometimes positive, sometimes negative, sometimes near zero), giving a mean close to zero and a large p-value.
+
 ### Why conditional sampling?
 
 | Property               | Naive perturbation (F + δ) | Conditional sampling |
