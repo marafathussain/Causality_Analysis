@@ -117,11 +117,92 @@ class ConditionalInterventionAnalysis:
             preds.append(model.predict(X_other_single.reshape(1, -1))[0])
         return np.mean(preds)
 
-    def _sample_counterfactuals(self, fitted_cond_models, sigma, X_subject, feature_idx):
+    @staticmethod
+    def _auto_detect_feature_types(X, feature_names):
+        """
+        Automatically detect whether each feature is continuous, categorical, or binary.
+
+        Detection rules:
+        1. Check if ALL values in the column are integers (even if stored as float).
+           If not, it's 'continuous'.
+        2. If all values are integers:
+           a. If only 2 unique values exist and they are {0,1} -> 'binary'
+           b. If the number of unique values is small (<=10) -> 'categorical'
+           c. Otherwise -> 'continuous' (e.g., age stored as integer but with many levels)
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Feature matrix (n_subjects, n_features).
+        feature_names : list of str
+            Feature names for reporting.
+
+        Returns
+        -------
+        types_list : list of str
+            Detected type for each feature.
+        """
+        n_features = X.shape[1]
+        types_list = []
+        detected_info = []
+
+        for i in range(n_features):
+            col = X[:, i]
+
+            # Check 1: Are all values integers?
+            all_integer = np.all(col == np.floor(col))
+
+            if not all_integer:
+                types_list.append("continuous")
+                detected_info.append(f"    {feature_names[i]}: continuous (has non-integer values)")
+                continue
+
+            # All values are integers — determine binary vs categorical vs continuous
+            unique_values = np.unique(col)
+            n_unique = len(unique_values)
+
+            # Check 2: Binary — exactly 2 unique values that are 0 and 1
+            if n_unique == 2 and set(unique_values) == {0.0, 1.0}:
+                types_list.append("binary")
+                detected_info.append(f"    {feature_names[i]}: binary (values: {{0, 1}})")
+
+            # Check 3: Categorical — integer-valued with few unique levels (<=10)
+            elif n_unique <= 10:
+                types_list.append("categorical")
+                vals_str = sorted(int(v) for v in unique_values)
+                detected_info.append(
+                    f"    {feature_names[i]}: categorical (integer, {n_unique} unique values: {vals_str})"
+                )
+
+            # Otherwise: many integer levels (e.g., age 18-90) — treat as continuous
+            else:
+                types_list.append("continuous")
+                detected_info.append(
+                    f"    {feature_names[i]}: continuous (integer but {n_unique} unique values)"
+                )
+
+        print("  Auto-detected feature types:")
+        for info in detected_info:
+            print(info)
+
+        return types_list
+
+    def _sample_counterfactuals(self, fitted_cond_models, sigma, X_subject, feature_idx, scaler):
         """
         Sample K plausible counterfactual values for feature_idx.
 
-        Returns array of shape (n_samples,).
+        Handles three feature types:
+          - 'continuous': samples from N(mu, sigma) without constraints
+          - 'categorical': rounds to nearest integer and clips to [min, max] of
+            observed values (e.g., sex: 1 or 2, education: 0-3)
+          - 'binary': rounds to 0 or 1
+
+        Since models operate in MinMaxScaled space, discrete constraints are applied
+        by: (1) inverse-transforming to original space, (2) rounding/clipping,
+        (3) re-scaling back. This ensures sampled values correspond to real
+        discrete values in the original feature space.
+
+        Returns array of shape (n_samples,) in scaled space.
         """
         mask = np.ones(len(X_subject), dtype=bool)
         mask[feature_idx] = False
@@ -132,9 +213,37 @@ class ConditionalInterventionAnalysis:
         rng = np.random.default_rng(self.random_state)
         counterfactual_values = rng.normal(loc=mu, scale=sigma, size=self.n_samples)
 
+        # Apply discrete constraints based on feature type
+        if self.feature_types_ is not None:
+            ftype = self.feature_types_[feature_idx]
+
+            if ftype in ("binary", "categorical"):
+                # Get original-space scale parameters for this feature
+                orig_min = scaler.data_min_[feature_idx]
+                orig_max = scaler.data_max_[feature_idx]
+                scale_range = orig_max - orig_min
+
+                if scale_range > 0:
+                    # Inverse transform: scaled -> original space
+                    original_values = counterfactual_values * scale_range + orig_min
+
+                    if ftype == "binary":
+                        # Round to 0 or 1 in original space
+                        original_values = np.clip(np.round(original_values), 0, 1)
+                    elif ftype == "categorical":
+                        # Round to integer within observed range
+                        f_min = self.feature_ranges_[feature_idx][0]
+                        f_max = self.feature_ranges_[feature_idx][1]
+                        original_values = np.clip(np.round(original_values), f_min, f_max)
+
+                    # Re-scale back to [0, 1] space
+                    counterfactual_values = (original_values - orig_min) / scale_range
+
+            # 'continuous' features: no modification needed
+
         return counterfactual_values
 
-    def _compute_feature_effect_regression(self, X_test, outcome_models, cond_models, sigma, feature_idx):
+    def _compute_feature_effect_regression(self, X_test, outcome_models, cond_models, sigma, feature_idx, scaler):
         """
         Compute interventional effect for regression task.
 
@@ -150,7 +259,7 @@ class ConditionalInterventionAnalysis:
             O_orig = O_orig[0]
 
             cf_values = self._sample_counterfactuals(
-                cond_models, sigma, X_subject, feature_idx
+                cond_models, sigma, X_subject, feature_idx, scaler
             )
 
             for cf_val in cf_values:
@@ -168,7 +277,7 @@ class ConditionalInterventionAnalysis:
 
         return np.array(all_deltas)
 
-    def _compute_feature_effect_classification(self, X_test, outcome_models, cond_models, sigma, feature_idx):
+    def _compute_feature_effect_classification(self, X_test, outcome_models, cond_models, sigma, feature_idx, scaler):
         """
         Compute interventional effect for classification task.
 
@@ -184,7 +293,7 @@ class ConditionalInterventionAnalysis:
             P_orig = P_orig[0]
 
             cf_values = self._sample_counterfactuals(
-                cond_models, sigma, X_subject, feature_idx
+                cond_models, sigma, X_subject, feature_idx, scaler
             )
 
             for cf_val in cf_values:
@@ -202,7 +311,7 @@ class ConditionalInterventionAnalysis:
 
         return np.array(all_deltas)
 
-    def fit(self, X, y, feature_names=None):
+    def fit(self, X, y, feature_names=None, feature_types=None):
         """
         Run the full conditional intervention analysis.
 
@@ -217,6 +326,20 @@ class ConditionalInterventionAnalysis:
         feature_names : list of str, optional
             Names for the features. If None and X is a DataFrame,
             column names are used.
+        feature_types : str, dict, list, or None, optional
+            Specifies the type of each feature for proper counterfactual sampling.
+            - If None or 'auto': automatically detects types from the data using:
+                  * All values are integers? If no → 'continuous'
+                  * Only 2 unique values {0, 1}? → 'binary'
+                  * Integer with ≤10 unique values? → 'categorical'
+                  * Integer with >10 unique values? → 'continuous'
+            - If dict: {feature_name_or_index: type_string}
+            - If list: [type_string_for_each_feature]
+            Valid type strings:
+              'continuous' — float-valued, no constraints
+              'categorical' — integer-valued within observed min/max range
+                              (e.g., education level 0-3, severity grade 1-4)
+              'binary' — only 0 or 1 (e.g., sex, presence/absence)
 
         Returns
         -------
@@ -238,6 +361,36 @@ class ConditionalInterventionAnalysis:
         if feature_names is None:
             feature_names = [f"Feature_{i}" for i in range(n_features)]
         self.feature_names_ = feature_names
+
+        # Process feature_types into a list indexed by feature position
+        if feature_types is None or feature_types == "auto":
+            # Auto-detect feature types from data
+            self.feature_types_ = self._auto_detect_feature_types(X, feature_names)
+        elif isinstance(feature_types, dict):
+            # Convert dict (keyed by name or index) to a list
+            types_list = ["continuous"] * n_features
+            for key, ftype in feature_types.items():
+                if isinstance(key, str):
+                    idx = feature_names.index(key)
+                else:
+                    idx = key
+                types_list[idx] = ftype
+            self.feature_types_ = types_list
+        elif isinstance(feature_types, list):
+            if len(feature_types) != n_features:
+                raise ValueError(
+                    f"feature_types list length ({len(feature_types)}) must match "
+                    f"number of features ({n_features})."
+                )
+            self.feature_types_ = feature_types
+        else:
+            raise ValueError("feature_types must be 'auto', a dict, a list, or None.")
+
+        # Compute observed min/max for categorical/binary features (before scaling)
+        self.feature_ranges_ = {}
+        for i in range(n_features):
+            if self.feature_types_[i] in ("categorical", "binary"):
+                self.feature_ranges_[i] = (int(np.min(X[:, i])), int(np.max(X[:, i])))
 
         kf = KFold(n_splits=self.n_folds, shuffle=True, random_state=self.random_state)
 
@@ -284,11 +437,11 @@ class ConditionalInterventionAnalysis:
 
                 if self.task_type == "regression":
                     deltas = self._compute_feature_effect_regression(
-                        X_test_scaled, outcome_fitted, cond_models, sigma, feat_idx
+                        X_test_scaled, outcome_fitted, cond_models, sigma, feat_idx, scaler
                     )
                 else:
                     deltas = self._compute_feature_effect_classification(
-                        X_test_scaled, outcome_fitted, cond_models, sigma, feat_idx
+                        X_test_scaled, outcome_fitted, cond_models, sigma, feat_idx, scaler
                     )
 
                 if len(deltas) > 0:
