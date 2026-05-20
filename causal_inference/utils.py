@@ -90,7 +90,7 @@ def generate_synthetic_data(
     # STEP 2: Generate truly CAUSAL features (independent random variables)
     # =========================================================================
     # These are drawn from a standard normal distribution N(0,1)
-    # They are completely independent of each other — no correlations among them
+    # They are completely independent of each other, no correlations among them
     # IMPORTANT: These are the ONLY features that will appear in the outcome equation
     X_causal = rng.normal(0, 1, size=(n_subjects, n_causal))
 
@@ -102,7 +102,7 @@ def generate_synthetic_data(
     #   (b) independent noise (makes it not perfectly correlated)
     # Formula: NonCausal_j = alpha * Causal_k + (1 - alpha) * noise
     # This makes non-causal features CORRELATED with the outcome (through causal features)
-    # but they do NOT directly cause the outcome — they are confounded/spurious
+    # but they do NOT directly cause the outcome; they are confounded/spurious
     X_non_causal = np.zeros((n_subjects, n_features - n_causal))
     for i in range(n_features - n_causal):
         # Randomly pick which causal feature this non-causal feature is derived from

@@ -32,7 +32,7 @@ def run_regression_demo():
     """Run regression task demonstration."""
 
     print("\n" + "=" * 70)
-    print("  CIA DEMO — REGRESSION TASK")
+    print("  CIA DEMO, REGRESSION TASK")
     print("  Consensus: Linear SVR + Gaussian SVR + Random Forest Regressor")
     print("=" * 70)
 
@@ -98,7 +98,7 @@ def run_classification_demo():
     """Run classification task demonstration."""
 
     print("\n" + "=" * 70)
-    print("  CIA DEMO — CLASSIFICATION TASK")
+    print("  CIA DEMO, CLASSIFICATION TASK")
     print("  Consensus: Linear SVC + Gaussian SVC + Random Forest Classifier")
     print("=" * 70)
 
@@ -257,7 +257,7 @@ def plot_results(results_df, filename, task_label, true_causal_features=None):
     ax.set_yticks(y_pos)
     ax.set_yticklabels(features)
     ax.set_xlabel("Estimated Causal Effect")
-    ax.set_title(f"Conditional Intervention Analysis \u2014 {task_label} Task (Consensus of 3 ML Models)")
+    ax.set_title(f"Conditional Intervention Analysis, {task_label} Task (Consensus of 3 ML Models)")
     ax.legend(handles=legend_elements, loc="lower right", fontsize=9)
 
     plt.tight_layout()

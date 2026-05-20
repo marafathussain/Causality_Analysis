@@ -157,16 +157,16 @@ class ConditionalInterventionAnalysis:
                 detected_info.append(f"    {feature_names[i]}: continuous (has non-integer values)")
                 continue
 
-            # All values are integers — determine binary vs categorical vs continuous
+            # All values are integers; determine binary vs categorical vs continuous
             unique_values = np.unique(col)
             n_unique = len(unique_values)
 
-            # Check 2: Binary — exactly 2 unique values that are 0 and 1
+            # Check 2: Binary, exactly 2 unique values that are 0 and 1
             if n_unique == 2 and set(unique_values) == {0.0, 1.0}:
                 types_list.append("binary")
                 detected_info.append(f"    {feature_names[i]}: binary (values: {{0, 1}})")
 
-            # Check 3: Categorical — integer-valued with few unique levels (<=10)
+            # Check 3: Categorical, integer-valued with few unique levels (<=10)
             elif n_unique <= 10:
                 types_list.append("categorical")
                 vals_str = sorted(int(v) for v in unique_values)
@@ -174,7 +174,7 @@ class ConditionalInterventionAnalysis:
                     f"    {feature_names[i]}: categorical (integer, {n_unique} unique values: {vals_str})"
                 )
 
-            # Otherwise: many integer levels (e.g., age 18-90) — treat as continuous
+            # Otherwise: many integer levels (e.g., age 18-90), treat as continuous
             else:
                 types_list.append("continuous")
                 detected_info.append(
@@ -336,10 +336,10 @@ class ConditionalInterventionAnalysis:
             - If dict: {feature_name_or_index: type_string}
             - If list: [type_string_for_each_feature]
             Valid type strings:
-              'continuous' — float-valued, no constraints
-              'categorical' — integer-valued within observed min/max range
+              'continuous'; float-valued, no constraints
+              'categorical'; integer-valued within observed min/max range
                               (e.g., education level 0-3, severity grade 1-4)
-              'binary' — only 0 or 1 (e.g., sex, presence/absence)
+              'binary'; only 0 or 1 (e.g., sex, presence/absence)
 
         Returns
         -------
