@@ -34,7 +34,7 @@ The approach is based on **Do-calculus via modeling**, a practical compromise be
 
 The goal is to get a **stable, trustworthy estimate** of each feature's causal effect, not one that depends on a lucky/unlucky train-test split.
 
-**Step A, Collect one effect estimate per CV fold:**
+**Step A - Collect one effect estimate per CV fold:**
 
 The data is split into K folds (default K=5). In each fold:
 - The outcome model and conditional model are trained on K-1 folds.
@@ -47,7 +47,7 @@ After all folds, we have K numbers (one per fold) representing the causal effect
 effects = [effect_fold1, effect_fold2, ..., effect_foldK]
 ```
 
-**Step B, Compute the mean effect:**
+**Step B - Compute the mean effect:**
 
 ```
 mean_effect = average(effects)
@@ -55,7 +55,7 @@ mean_effect = average(effects)
 
 This is the reported "causal effect"; positive means increasing the feature increases the outcome, negative means it decreases it.
 
-**Step C, Compute the confidence interval:**
+**Step C - Compute the confidence interval:**
 
 We use the t-distribution (appropriate for small K) to compute a 95% confidence interval:
 
@@ -67,7 +67,7 @@ CI = [mean_effect - t_critical * SE, mean_effect + t_critical * SE]
 
 If the CI does not contain zero, the effect is likely real and not due to random variation across folds.
 
-**Step D, Statistical significance (one-sample t-test):**
+**Step D - Statistical significance (one-sample t-test):**
 
 We test the null hypothesis H₀: "the true causal effect is zero" using a one-sample t-test:
 
