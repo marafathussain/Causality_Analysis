@@ -89,7 +89,7 @@ def run_regression_demo():
     _validate(causal_features, true_causal)
 
     # Plot
-    plot_results(cia.get_results(), true_causal, "causal_effects_regression.png", "Regression")
+    plot_results(cia.get_results(), "causal_effects_regression.png", "Regression", true_causal_features=true_causal)
 
     return cia
 
@@ -155,7 +155,7 @@ def run_classification_demo():
     _validate(causal_features, true_causal)
 
     # Plot
-    plot_results(cia.get_results(), true_causal, "causal_effects_classification.png", "Classification")
+    plot_results(cia.get_results(), "causal_effects_classification.png", "Classification", true_causal_features=true_causal)
 
     return cia
 
@@ -179,8 +179,25 @@ def _validate(causal_features_df, true_causal):
         print(f"    Precision: {precision:.2f}, Recall: {recall:.2f}")
 
 
-def plot_results(results_df, true_causal_features, filename, task_label):
-    """Plot causal effects with confidence intervals."""
+def plot_results(results_df, filename, task_label, true_causal_features=None):
+    """
+    Plot causal effects with confidence intervals.
+
+    This is the default visualization for CIA results. Features are colored
+    by statistical significance. If ground-truth causal features are provided
+    (for synthetic data validation), coloring distinguishes true vs false positives.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        Output from cia.get_results().
+    filename : str
+        Path to save the figure.
+    task_label : str
+        'Regression' or 'Classification' for the title.
+    true_causal_features : list or None
+        Ground-truth causal feature names (only for synthetic data validation).
+    """
     fig, ax = plt.subplots(figsize=(10, 6))
 
     features = results_df["feature"].tolist()
@@ -189,12 +206,42 @@ def plot_results(results_df, true_causal_features, filename, task_label):
     ci_high = results_df["ci_upper"].values
     p_values = results_df["p_value"].values
 
-    colors = []
-    for i, feat in enumerate(features):
-        if feat in true_causal_features:
-            colors.append("darkred" if p_values[i] < 0.05 else "salmon")
-        else:
-            colors.append("steelblue" if p_values[i] < 0.05 else "lightsteelblue")
+    if true_causal_features is not None:
+        # Demo/validation mode: color by ground truth + significance
+        colors = []
+        for i, feat in enumerate(features):
+            if feat in true_causal_features:
+                colors.append("darkred" if p_values[i] < 0.05 else "salmon")
+            else:
+                colors.append("steelblue" if p_values[i] < 0.05 else "lightsteelblue")
+
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor="darkred", label="True causal (significant)"),
+            Patch(facecolor="salmon", label="True causal (not significant)"),
+            Patch(facecolor="steelblue", label="Non-causal (significant)"),
+            Patch(facecolor="lightsteelblue", label="Non-causal (not significant)"),
+        ]
+    else:
+        # Default mode: color by significance only (for real data)
+        colors = []
+        for i in range(len(features)):
+            if p_values[i] < 0.001:
+                colors.append("darkred")
+            elif p_values[i] < 0.01:
+                colors.append("firebrick")
+            elif p_values[i] < 0.05:
+                colors.append("darkorange")
+            else:
+                colors.append("lightgray")
+
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor="darkred", label="p < 0.001 (***)"),
+            Patch(facecolor="firebrick", label="p < 0.01 (**)"),
+            Patch(facecolor="darkorange", label="p < 0.05 (*)"),
+            Patch(facecolor="lightgray", label="Not significant"),
+        ]
 
     y_pos = np.arange(len(features))
 
@@ -210,15 +257,7 @@ def plot_results(results_df, true_causal_features, filename, task_label):
     ax.set_yticks(y_pos)
     ax.set_yticklabels(features)
     ax.set_xlabel("Estimated Causal Effect")
-    ax.set_title(f"Conditional Intervention Analysis — {task_label} Task (Consensus of 3 ML Models)")
-
-    from matplotlib.patches import Patch
-    legend_elements = [
-        Patch(facecolor="darkred", label="True causal (significant)"),
-        Patch(facecolor="salmon", label="True causal (not significant)"),
-        Patch(facecolor="steelblue", label="Non-causal (significant)"),
-        Patch(facecolor="lightsteelblue", label="Non-causal (not significant)"),
-    ]
+    ax.set_title(f"Conditional Intervention Analysis \u2014 {task_label} Task (Consensus of 3 ML Models)")
     ax.legend(handles=legend_elements, loc="lower right", fontsize=9)
 
     plt.tight_layout()
@@ -238,6 +277,7 @@ def run_with_custom_data_example():
     print("""
     # --- REGRESSION EXAMPLE ---
     from causal_inference import ConditionalInterventionAnalysis
+    from demo_run import plot_results
     import pandas as pd
 
     X = pd.read_csv("your_features.csv")
@@ -255,6 +295,9 @@ def run_with_custom_data_example():
     cia.summary()
     causal = cia.get_causal_features(alpha=0.05)
 
+    # Generate the default figure (colored by significance level)
+    plot_results(cia.get_results(), "my_causal_effects.png", "Regression")
+
     # --- CLASSIFICATION EXAMPLE ---
     cia_cls = ConditionalInterventionAnalysis(
         task_type="classification",
@@ -265,6 +308,7 @@ def run_with_custom_data_example():
     )
     cia_cls.fit(X, y_binary)
     cia_cls.summary()
+    plot_results(cia_cls.get_results(), "my_causal_effects_cls.png", "Classification")
 
     # --- SINGLE MODEL (instead of consensus) ---
     cia_single = ConditionalInterventionAnalysis(
