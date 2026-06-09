@@ -1,274 +1,315 @@
 # Conditional Intervention Analysis (CIA)
 
-A Python framework for estimating **causal effects** of features on an outcome variable using conditional sampling and counterfactual evaluation. This method approximates do-calculus interventions by generating biologically plausible counterfactuals through learned conditional distributions.
+A Python framework for estimating **causal effects** of features on an outcome using conditional sampling and counterfactual evaluation. CIA approximates do-calculus interventions by generating biologically plausible counterfactuals through learned conditional distributions.
 
-Uses the same **consensus of three ML techniques** as [FIBE](https://github.com/i3-research/fibe):
-- **Regression**: Linear SVR + Gaussian SVR + Random Forest Regressor (averaged predictions)
-- **Classification**: Linear SVC + Gaussian SVC + Random Forest Classifier (majority voting)
+It is designed to follow [FIBE](https://github.com/i3-research/fibe) feature selection: FIBE finds correlated features; CIA tests which of those features have a plausible **interventional effect** on the outcome.
 
-## Motivation
+---
 
-Feature selection methods (such as FIBE, Forward Inclusion Backward Elimination) identify features that are **correlated** with an outcome, but correlation does not imply causation. This framework takes the selected features one step further by estimating which features have a genuine **interventional (causal) effect** on the outcome.
+## What problem does CIA solve?
 
-## Method Overview
+| Step | Method | What it tells you |
+|------|--------|-------------------|
+| 1 | FIBE (or similar) | Features **correlated** with the outcome |
+| 2 | **CIA (this repo)** | Which selected features show **causal evidence** under conditional intervention |
 
-The approach is based on **Do-calculus via modeling**, a practical compromise between naive perturbation and full structural causal models:
+Correlation does not imply causation. CIA goes one step further by asking: *if we change feature F_i in a biologically plausible way, how much does the predicted outcome change?*
 
-1. **Train outcome model(s)**: Learn `O = f(F_1, F_2, ..., F_n)` using consensus of 3 ML models.
+---
 
-2. **Learn conditional distributions**: For each feature `F_i`, learn `P(F_i | F_{-i})` using consensus of 3 regression models.
+## How CIA works (step by step)
 
-3. **Generate counterfactuals via conditional sampling**: Instead of arbitrary perturbation (which breaks biological plausibility), sample:
-   ```
-   F_i' ~ P(F_i | F_{-i})
-   ```
-   This produces values that are consistent with the subject's other features.
+Suppose you have **n subjects**, **p features** (e.g., 10 features selected by FIBE), and one **outcome** (continuous score or binary label).
 
-4. **Evaluate interventional effect**:
-   - Regression: `ΔO = f(F_i', F_{-i}) - f(F_i, F_{-i})` (change in predicted outcome)
-   - Classification: `ΔP = P(class=1 | F_i', F_{-i}) - P(class=1 | F_i, F_{-i})` (change in probability)
+### Step 1: Train an outcome model
 
-5. **Aggregate across subjects and CV folds**: Report mean causal effects with confidence intervals and statistical significance.
-
-### How aggregation, confidence intervals, and significance testing work
-
-The goal is to get a **stable, trustworthy estimate** of each feature's causal effect, not one that depends on a lucky/unlucky train-test split.
-
-**Step A - Collect one effect estimate per CV fold:**
-
-The data is split into K folds (default K=5). In each fold:
-- The outcome model and conditional model are trained on K-1 folds.
-- For each test subject, we sample K counterfactual values of feature F_i, compute how much the predicted outcome changes per unit change in the feature (ΔO/ΔF for regression, ΔP/ΔF for classification), and average these within the subject.
-- The mean across all test subjects in that fold gives **one effect estimate for that fold**.
-
-After all folds, we have K numbers (one per fold) representing the causal effect of feature F_i:
+Learn a predictive mapping from features to outcome:
 
 ```
-effects = [effect_fold1, effect_fold2, ..., effect_foldK]
+O = f(F_1, F_2, ..., F_p)
 ```
 
-**Step B - Compute the mean effect:**
+CIA uses a **consensus of 3 ML models** (same philosophy as FIBE):
+- **Regression**: Linear SVR + Gaussian SVR + Random Forest (average predictions)
+- **Classification**: Linear SVC + Gaussian SVC + Random Forest (majority vote / averaged probabilities)
+
+For **large datasets** (n > 1000), use `consensus_fast` instead (Ridge/Logistic Regression + Gradient Boosting + Random Forest).
+
+### Step 2: Learn conditional distributions
+
+For each feature `F_i`, learn how it relates to the other features:
 
 ```
-mean_effect = average(effects)
+P(F_i | F_{-i})
 ```
 
-This is the reported "causal effect"; positive means increasing the feature increases the outcome, negative means it decreases it.
+This is done with regression models (consensus of 3 regressors). The model predicts the expected value of `F_i` given all other features for that subject.
 
-**Step C - Compute the confidence interval:**
+### Step 3: Generate counterfactuals (conditional sampling)
 
-We use the t-distribution (appropriate for small K) to compute a 95% confidence interval:
-
-```
-SE = standard_error(effects)                    # std(effects) / sqrt(K)
-t_critical = t_distribution(0.975, df=K-1)      # two-tailed, 95%
-CI = [mean_effect - t_critical * SE, mean_effect + t_critical * SE]
-```
-
-If the CI does not contain zero, the effect is likely real and not due to random variation across folds.
-
-**Step D - Statistical significance (one-sample t-test):**
-
-We test the null hypothesis H₀: "the true causal effect is zero" using a one-sample t-test:
+For each test subject, CIA does **not** use naive perturbation like `F_i + δ` (which can create unrealistic values). Instead it samples:
 
 ```
-t_statistic = mean_effect / SE
-p_value = two-tailed probability of observing t_statistic under H₀
+F_i' ~ P(F_i | F_{-i})
 ```
 
-- **p < 0.05** → statistically significant (we reject "no effect")
-- **p < 0.01** → highly significant
-- **p < 0.001** → very highly significant
+So `F_i'` is a plausible alternative value of feature i that is consistent with that subject's other features.
 
-**Why this works:** If a feature is truly causal, perturbing it will consistently change the outcome across ALL folds, giving a mean far from zero and a small p-value. If a feature is merely correlated (spurious), the effect will be inconsistent across folds (sometimes positive, sometimes negative, sometimes near zero), giving a mean close to zero and a large p-value.
+**Feature types** (continuous, binary, categorical) are **auto-detected** from the data. Categorical and binary features are rounded to valid integer levels after sampling.
+
+### Step 4: Measure interventional effect per subject
+
+For each counterfactual sample:
+
+- **Regression**: effect ∝ `(predicted outcome with F_i') - (predicted outcome with F_i)` per unit change in F_i → **ΔO / ΔF**
+- **Classification**: effect ∝ change in **predicted probability of class 1** per unit change in F_i → **ΔP / ΔF**
+
+Effects are averaged over counterfactual samples within each subject, then over test subjects within each CV fold.
+
+### Step 5: Cross-validation and statistics
+
+Data are split into **K folds** (default K=5). Each fold gives **one mean effect** per feature. Across folds:
+
+| Output | Meaning |
+|--------|---------|
+| `causal_effect` | Mean effect across folds |
+| `ci_lower`, `ci_upper` | 95% confidence interval (t-distribution) |
+| `p_value` | One-sample t-test: H₀ = true effect is zero |
+| `significant` | p < 0.05 |
+
+**Interpretation:** A feature with a large |effect|, CI not crossing zero, and small p-value is strong **causal evidence under the method's assumptions** (not proof of causality without randomized trials).
 
 ### Why conditional sampling?
 
-| Property               | Naive perturbation (F + δ) | Conditional sampling |
-|------------------------|---------------------------|---------------------|
-| Realistic values?      | No                        | Yes                 |
-| Respects correlations? | No                        | Yes                 |
-| Causal interpretation? | Weak                      | Stronger            |
+| Property | Naive perturbation (F + δ) | Conditional sampling |
+|----------|---------------------------|----------------------|
+| Realistic values? | No | Yes |
+| Respects feature correlations? | No | Yes |
+| Causal interpretation | Weak | Stronger |
 
-### Why consensus of 3 models?
-
-Using multiple diverse ML techniques (SVR/SVC + RF) and aggregating their outputs reduces model-specific bias. The effect estimate is more robust because it does not depend on any single model's assumptions.
+---
 
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Causality_Analysis.git
+git clone https://github.com/marafathussain/Causality_Analysis.git
 cd Causality_Analysis
 pip install -r requirements.txt
 ```
 
-## Quick Start
+---
 
-### Regression Task
+## Quick start
 
-```python
-from causal_inference import ConditionalInterventionAnalysis
-
-cia = ConditionalInterventionAnalysis(
-    task_type="regression",       # continuous outcome
-    n_samples=50,
-    n_folds=5,
-    model_name="consensus",       # Linear SVR + Gaussian SVR + RF
-    conditional_model="consensus",
-    random_state=42,
-)
-cia.fit(X, y)
-cia.summary()
-causal_features = cia.get_causal_features(alpha=0.05)
-```
-
-### Classification Task
+### Small / medium datasets (n < 500)
 
 ```python
 from causal_inference import ConditionalInterventionAnalysis
 
 cia = ConditionalInterventionAnalysis(
-    task_type="classification",   # binary outcome (0/1)
-    n_samples=50,
+    task_type="regression",       # or "classification"
+    n_samples=30,
     n_folds=5,
-    model_name="consensus",       # Linear SVC + Gaussian SVC + RF
+    model_name="consensus",
     conditional_model="consensus",
     random_state=42,
 )
-cia.fit(X, y_binary)
+cia.fit(X, y)                     # feature types auto-detected
 cia.summary()
+results = cia.get_results()
+causal = cia.get_causal_features(alpha=0.05)
 ```
 
-### Using a Single Model (instead of consensus)
+### Large datasets (n > 1000, e.g., ABCD-scale)
+
+SVR/SVC training scales poorly (O(n²)–O(n³)). Use **`consensus_fast`** and **`max_subjects`**:
 
 ```python
 cia = ConditionalInterventionAnalysis(
     task_type="regression",
-    model_name="RegressionForest",      # only Random Forest for outcome
-    conditional_model="gaussianSVR",    # only Gaussian SVR for conditional
+    n_samples=20,
+    n_folds=5,
+    model_name="consensus_fast",        # Ridge + GBM + RF
+    conditional_model="consensus_fast",
+    max_subjects=300,                   # subsample test subjects per fold
+    random_state=42,
 )
+cia.fit(X, y)
+cia.summary()
 ```
 
-## Running the Demo
+**Recommended settings by dataset size:**
+
+| Dataset size | Settings |
+|--------------|----------|
+| n < 500 | `model_name="consensus"`, defaults |
+| 500 – 2,000 | `consensus_fast`, `n_samples=30` |
+| 2,000 – 10,000 | `consensus_fast`, `max_subjects=500`, `n_samples=20` |
+| n > 10,000 | `consensus_fast`, `max_subjects=300`, `n_samples=15`, `n_folds=3` |
+
+`max_subjects` randomly subsamples test subjects per fold. Fold-level aggregation keeps estimates stable while cutting runtime sharply.
+
+---
+
+## Running the demo
 
 ```bash
-python demo_run.py                     # runs both regression and classification
-python demo_run.py --task regression   # regression only
-python demo_run.py --task classification  # classification only
+python demo_run.py                          # regression + classification (small data)
+python demo_run.py --task regression        # regression only
+python demo_run.py --task classification    # classification only
+python demo_run.py --task large             # large-data mode (consensus_fast + max_subjects)
 ```
 
-The demo uses synthetic data with known causal structure so you can verify the method correctly identifies truly causal features.
+The demo uses synthetic data with known causal features, prints a statistical summary, and saves bar plots with confidence intervals.
 
-## Using with FIBE Output
+---
+
+## Using with FIBE output
 
 ```python
 import pandas as pd
 from causal_inference import ConditionalInterventionAnalysis
+from demo_run import plot_results
 
 data = pd.read_csv("your_data.csv")
-
-# Features selected by FIBE
-selected_features = ["feature_A", "feature_B", "feature_C", ...]
+selected_features = ["feat_A", "feat_B", ...]  # from FIBE
 X = data[selected_features]
-y = data["outcome_score"]
+y = data["outcome"]
 
-# Run causal analysis on the FIBE-selected features
+# Use consensus_fast for large cohorts
 cia = ConditionalInterventionAnalysis(
-    task_type="regression",    # or "classification"
-    n_samples=50,
+    task_type="regression",
+    model_name="consensus_fast",
+    conditional_model="consensus_fast",
+    max_subjects=300,
+    n_samples=20,
     n_folds=5,
-    model_name="consensus",
 )
 cia.fit(X, y, feature_names=selected_features)
 cia.summary()
+
+# Save figure (colored by p-value)
+plot_results(cia.get_results(), "causal_effects.png", "Regression")
 ```
+
+---
 
 ## Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `task_type` | `"regression"` | `"regression"` for continuous outcomes, `"classification"` for binary (0/1) |
-| `n_samples` | 50 | Number of counterfactual samples per subject per feature |
-| `n_folds` | 5 | Number of cross-validation folds |
-| `model_name` | `"consensus"` | Outcome model. Regression: `"linearSVR"`, `"gaussianSVR"`, `"RegressionForest"`, `"consensus"`. Classification: `"linearSVC"`, `"gaussianSVC"`, `"RandomForest"`, `"consensus"` |
-| `conditional_model` | `"consensus"` | Model for P(F_i \| F_{-i}). Always regression: `"linearSVR"`, `"gaussianSVR"`, `"RegressionForest"`, `"consensus"` |
-| `confidence_level` | 0.95 | Confidence level for effect intervals |
-| `random_state` | 42 | Random seed for reproducibility |
+| `task_type` | `"regression"` | `"regression"` or `"classification"` |
+| `n_samples` | 50 | Counterfactual samples per subject per feature |
+| `n_folds` | 5 | Cross-validation folds |
+| `model_name` | `"consensus"` | Outcome model (see table below) |
+| `conditional_model` | `"consensus"` | Model for P(F_i \| F_{-i}) |
+| `max_subjects` | `None` | Max test subjects per fold; subsample if exceeded |
+| `confidence_level` | 0.95 | CI level |
+| `random_state` | 42 | Random seed |
+
+**`fit()` arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `X` | Feature matrix (DataFrame or ndarray) |
+| `y` | Outcome vector |
+| `feature_names` | Optional column names |
+| `feature_types` | `None` or `"auto"` (default: auto-detect), dict, or list: `"continuous"`, `"binary"`, `"categorical"` |
+
+### Model options
+
+**Regression – `model_name` / `conditional_model`:**
+
+| Value | Models |
+|-------|--------|
+| `consensus` | Linear SVR + Gaussian SVR + RF (best for small n) |
+| `consensus_fast` | Ridge + Gradient Boosting + RF (best for large n) |
+| `linearSVR`, `gaussianSVR`, `RegressionForest`, `Ridge`, `GradientBoosting` | Single model |
+
+**Classification – `model_name`:**
+
+| Value | Models |
+|-------|--------|
+| `consensus` | Linear SVC + Gaussian SVC + RF |
+| `consensus_fast` | Logistic Regression + Gradient Boosting + RF |
+| `linearSVC`, `gaussianSVC`, `RandomForest`, `LogisticRegression`, `GradientBoosting` | Single model |
+
+---
 
 ## Output
 
-The analysis returns a DataFrame with:
+### 1. DataFrame (`cia.get_results()`)
 
 | Column | Description |
 |--------|-------------|
 | `feature` | Feature name |
-| `causal_effect` | Estimated interventional effect (regression: ΔO/ΔF, classification: ΔP/ΔF) |
-| `std` | Standard deviation across CV folds |
-| `ci_lower` | Lower bound of confidence interval |
-| `ci_upper` | Upper bound of confidence interval |
-| `t_statistic` | One-sample t-test statistic (H0: effect = 0) |
-| `p_value` | p-value for significance |
-| `significant` | Boolean flag (p < alpha) |
+| `causal_effect` | Mean interventional effect (ΔO/ΔF or ΔP/ΔF) |
+| `std` | Std across CV folds |
+| `ci_lower`, `ci_upper` | Confidence interval |
+| `t_statistic` | t-test statistic |
+| `p_value` | Significance |
+| `significant` | p < alpha |
 
-## Repository Structure
+### 2. Console summary (`cia.summary()`)
+
+Formatted table of effects, p-values, and significance markers.
+
+### 3. Significant features (`cia.get_causal_features(alpha=0.05)`)
+
+Subset of results with p < alpha.
+
+### 4. Figure (`plot_results()` in `demo_run.py`)
+
+Horizontal bar chart of causal effects with 95% CI error bars, colored by significance.
+
+```python
+from demo_run import plot_results
+plot_results(cia.get_results(), "causal_effects.png", "Regression")
+```
+
+---
+
+## Repository structure
 
 ```
 Causality_Analysis/
-├── README.md                          # This file
-├── requirements.txt                   # Python dependencies
-├── demo_run.py                        # Demo script (regression + classification)
-├── causal_inference/                  # Main package
-│   ├── __init__.py                    # Package initialization
-│   ├── conditional_intervention.py    # Core CIA algorithm
-│   ├── outcome_model.py              # 3 ML models + consensus (matching FIBE)
-│   └── utils.py                      # Helper functions
-└── Causality_discussion_with_LLM.txt  # Background discussion on methodology
+├── README.md
+├── requirements.txt
+├── demo_run.py
+├── causal_inference/
+│   ├── __init__.py
+│   ├── conditional_intervention.py   # Core CIA algorithm
+│   ├── outcome_model.py              # Consensus / consensus_fast models
+│   └── utils.py                      # Synthetic data, helpers
+└── Causality_discussion_with_LLM.txt
 ```
 
-## ML Models Used (Same as FIBE)
+---
 
-### Regression Task
-| Model | Description |
-|-------|-------------|
-| Linear SVR | Support Vector Regression with linear kernel |
-| Gaussian SVR | Support Vector Regression with RBF kernel |
-| Regression Forest | Random Forest Regressor (100 trees, max_depth=5) |
-| **Consensus** | Average of predictions from all three models |
+## Theoretical note
 
-### Classification Task
-| Model | Description |
-|-------|-------------|
-| Linear SVC | Support Vector Classification with linear kernel |
-| Gaussian SVC | Support Vector Classification with RBF kernel |
-| Random Forest | Random Forest Classifier (100 trees, max_depth=5) |
-| **Consensus** | Majority voting across all three models |
-
-## Theoretical Note
-
-This framework approximates the interventional distribution:
+CIA approximates:
 
 ```
 P(O | do(F_i))
 ```
 
-by computing:
+via:
 
 ```
-P(O | F_i' | F_{-i}),  where F_i' ~ P(F_i | F_{-i})
+P(O | F_i', F_{-i}),   where F_i' ~ P(F_i | F_{-i})
 ```
 
-These are **not identical** unless certain assumptions hold (no hidden confounders, correct model specification). The method provides **causal evidence under assumptions** rather than definitive proof of causality. For a paper, appropriate language would be:
+These are not identical without assumptions (no hidden confounders, correct models). Appropriate wording for a paper:
 
-> "We estimated feature-level interventional effects by sampling from the conditional distribution P(F_i | F_{-i}), thereby generating biologically plausible counterfactuals while preserving the joint feature structure. Causal effects were aggregated using a consensus of three diverse ML models (SVR/SVC variants and Random Forest) to reduce model-specific bias."
+> "We estimated feature-level interventional effects by sampling from the conditional distribution P(F_i | F_{-i}), generating biologically plausible counterfactuals while preserving joint feature structure. Effects were aggregated using a consensus of three ML models to reduce model-specific bias."
+
+---
 
 ## Dependencies
 
 - Python >= 3.8
-- NumPy >= 1.21
-- Pandas >= 1.3
-- Scikit-learn >= 1.0
-- SciPy >= 1.7
-- Matplotlib >= 3.4
+- NumPy, Pandas, scikit-learn, SciPy, Matplotlib
 
 ## License
 

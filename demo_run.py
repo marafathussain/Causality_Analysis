@@ -1,21 +1,18 @@
 """
 Demo: Conditional Intervention Analysis (CIA)
 
-This script demonstrates how to use the CIA framework to estimate
-causal effects of features on an outcome variable.
-
-Supports both REGRESSION and CLASSIFICATION tasks, using the same
-consensus of three ML techniques as FIBE:
-  - Regression: Linear SVR + Gaussian SVR + Random Forest
-  - Classification: Linear SVC + Gaussian SVC + Random Forest
+Demonstrates causal effect estimation for regression and classification.
+Also includes a large-dataset demo using consensus_fast and max_subjects.
 
 Usage:
-    python demo_run.py                    # runs both regression and classification demos
-    python demo_run.py --task regression  # regression demo only
-    python demo_run.py --task classification  # classification demo only
+    python demo_run.py                          # regression + classification
+    python demo_run.py --task regression        # small-data regression
+    python demo_run.py --task classification    # small-data classification
+    python demo_run.py --task large             # large-data (consensus_fast)
 """
 
 import sys
+import time
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -29,18 +26,15 @@ from causal_inference import (
 
 
 def run_regression_demo():
-    """Run regression task demonstration."""
+    """Regression demo with FIBE-style consensus (small data)."""
 
     print("\n" + "=" * 70)
-    print("  CIA DEMO, REGRESSION TASK")
-    print("  Consensus: Linear SVR + Gaussian SVR + Random Forest Regressor")
+    print("  CIA DEMO, REGRESSION TASK (consensus)")
+    print("  Models: Linear SVR + Gaussian SVR + Random Forest")
     print("=" * 70)
 
-    # Generate synthetic data
     print("\n[Step 1] Generating synthetic regression data...")
-    print("  - 80 subjects, 8 features")
-    print("  - First 3 features are truly CAUSAL")
-    print("  - Remaining 5 are correlated but NON-CAUSAL")
+    print("  - 80 subjects, 8 features (3 causal, 5 correlated non-causal)")
 
     X, y, true_causal = generate_synthetic_data(
         n_subjects=80,
@@ -51,13 +45,10 @@ def run_regression_demo():
         random_state=42,
     )
 
-    print(f"\n  Ground truth causal features: {true_causal}")
-    print(f"  Feature matrix shape: {X.shape}")
-    print(f"  Outcome (continuous) range: [{y.min():.2f}, {y.max():.2f}]")
+    print(f"  Ground truth causal: {true_causal}")
+    print(f"  X shape: {X.shape}, y range: [{y.min():.2f}, {y.max():.2f}]")
 
-    # Initialize CIA
-    print("\n[Step 2] Initializing CIA with consensus models...")
-
+    print("\n[Step 2] Initializing CIA (consensus)...")
     cia = ConditionalInterventionAnalysis(
         task_type="regression",
         n_samples=30,
@@ -68,45 +59,41 @@ def run_regression_demo():
         random_state=42,
     )
 
-    # Run analysis
     print("\n[Step 3] Running analysis...\n")
     cia.fit(X, y)
-
-    # Summary
     cia.summary()
 
-    # Significant features
-    print("\n[Step 4] Significant causal features (p < 0.05):")
+    print("\n[Step 4] Significant features (p < 0.05):")
     causal_features = cia.get_causal_features(alpha=0.05)
     if len(causal_features) > 0:
         for _, row in causal_features.iterrows():
             print(f"    - {row['feature']}: effect = {row['causal_effect']:.4f}, p = {row['p_value']:.4f}")
     else:
-        print("    None found at p < 0.05")
+        print("    None found.")
 
-    # Validation
     print("\n[Step 5] Validation against ground truth:")
     _validate(causal_features, true_causal)
 
-    # Plot
-    plot_results(cia.get_results(), "causal_effects_regression.png", "Regression", true_causal_features=true_causal)
+    plot_results(
+        cia.get_results(),
+        "causal_effects_regression.png",
+        "Regression",
+        true_causal_features=true_causal,
+    )
 
     return cia
 
 
 def run_classification_demo():
-    """Run classification task demonstration."""
+    """Classification demo with FIBE-style consensus (small data)."""
 
     print("\n" + "=" * 70)
-    print("  CIA DEMO, CLASSIFICATION TASK")
-    print("  Consensus: Linear SVC + Gaussian SVC + Random Forest Classifier")
+    print("  CIA DEMO, CLASSIFICATION TASK (consensus)")
+    print("  Models: Linear SVC + Gaussian SVC + Random Forest")
     print("=" * 70)
 
-    # Generate synthetic data
     print("\n[Step 1] Generating synthetic classification data...")
-    print("  - 100 subjects, 8 features")
-    print("  - First 3 features are truly CAUSAL")
-    print("  - Remaining 5 are correlated but NON-CAUSAL")
+    print("  - 100 subjects, 8 features (3 causal, 5 correlated non-causal)")
 
     X, y, true_causal = generate_synthetic_data(
         n_subjects=100,
@@ -117,13 +104,10 @@ def run_classification_demo():
         random_state=42,
     )
 
-    print(f"\n  Ground truth causal features: {true_causal}")
-    print(f"  Feature matrix shape: {X.shape}")
+    print(f"  Ground truth causal: {true_causal}")
     print(f"  Class distribution: {dict(pd.Series(y).value_counts())}")
 
-    # Initialize CIA
-    print("\n[Step 2] Initializing CIA with consensus models...")
-
+    print("\n[Step 2] Initializing CIA (consensus)...")
     cia = ConditionalInterventionAnalysis(
         task_type="classification",
         n_samples=30,
@@ -134,28 +118,106 @@ def run_classification_demo():
         random_state=42,
     )
 
-    # Run analysis
     print("\n[Step 3] Running analysis...\n")
     cia.fit(X, y)
-
-    # Summary
     cia.summary()
 
-    # Significant features
-    print("\n[Step 4] Significant causal features (p < 0.05):")
+    print("\n[Step 4] Significant features (p < 0.05):")
     causal_features = cia.get_causal_features(alpha=0.05)
     if len(causal_features) > 0:
         for _, row in causal_features.iterrows():
             print(f"    - {row['feature']}: prob. effect = {row['causal_effect']:.4f}, p = {row['p_value']:.4f}")
     else:
-        print("    None found at p < 0.05")
+        print("    None found.")
 
-    # Validation
     print("\n[Step 5] Validation against ground truth:")
     _validate(causal_features, true_causal)
 
-    # Plot
-    plot_results(cia.get_results(), "causal_effects_classification.png", "Classification", true_causal_features=true_causal)
+    plot_results(
+        cia.get_results(),
+        "causal_effects_classification.png",
+        "Classification",
+        true_causal_features=true_causal,
+    )
+
+    return cia
+
+
+def run_large_dataset_demo():
+    """
+    Large-dataset demo using consensus_fast and max_subjects.
+
+    Mimics settings suitable for cohorts like ABCD (thousands of subjects,
+    dozens of FIBE-selected features). Uses a synthetic dataset with
+    500 subjects and 12 features for a runnable example.
+    """
+
+    print("\n" + "=" * 70)
+    print("  CIA DEMO, LARGE DATASET (consensus_fast)")
+    print("  Models: Ridge + Gradient Boosting + Random Forest")
+    print("  Options: max_subjects=100, n_samples=15, n_folds=3")
+    print("=" * 70)
+
+    print("\n[Step 1] Generating larger synthetic dataset...")
+    print("  - 500 subjects, 12 features (3 causal, 9 correlated non-causal)")
+
+    X, y, true_causal = generate_synthetic_data(
+        n_subjects=500,
+        n_features=12,
+        n_causal=3,
+        noise_level=0.5,
+        task_type="regression",
+        random_state=42,
+    )
+
+    print(f"  Ground truth causal: {true_causal}")
+    print(f"  X shape: {X.shape}")
+
+    print("\n[Step 2] Initializing CIA for large data...")
+    print("  Use these settings for real large cohorts (e.g., n=9000, p=47):")
+    print("    model_name='consensus_fast'")
+    print("    conditional_model='consensus_fast'")
+    print("    max_subjects=300, n_samples=20, n_folds=5")
+
+    cia = ConditionalInterventionAnalysis(
+        task_type="regression",
+        n_samples=15,
+        n_folds=3,
+        model_name="consensus_fast",
+        conditional_model="consensus_fast",
+        max_subjects=100,
+        confidence_level=0.95,
+        random_state=42,
+    )
+
+    print("\n[Step 3] Running analysis...\n")
+    t0 = time.time()
+    cia.fit(X, y)
+    elapsed = time.time() - t0
+    print(f"\n  Elapsed time: {elapsed:.1f} seconds")
+
+    cia.summary()
+
+    print("\n[Step 4] Significant features (p < 0.05):")
+    causal_features = cia.get_causal_features(alpha=0.05)
+    if len(causal_features) > 0:
+        for _, row in causal_features.iterrows():
+            print(f"    - {row['feature']}: effect = {row['causal_effect']:.4f}, p = {row['p_value']:.4f}")
+    else:
+        print("    None found.")
+
+    print("\n[Step 5] Validation against ground truth:")
+    _validate(causal_features, true_causal)
+
+    plot_results(
+        cia.get_results(),
+        "causal_effects_large.png",
+        "Regression (Large Data)",
+        true_causal_features=true_causal,
+    )
+
+    print("\n[Step 6] Full results table:")
+    print(format_results_table(cia.get_results(), task_type="regression"))
 
     return cia
 
@@ -181,11 +243,7 @@ def _validate(causal_features_df, true_causal):
 
 def plot_results(results_df, filename, task_label, true_causal_features=None):
     """
-    Plot causal effects with confidence intervals.
-
-    This is the default visualization for CIA results. Features are colored
-    by statistical significance. If ground-truth causal features are provided
-    (for synthetic data validation), coloring distinguishes true vs false positives.
+    Default CIA visualization: horizontal bar chart with 95% CI.
 
     Parameters
     ----------
@@ -194,9 +252,10 @@ def plot_results(results_df, filename, task_label, true_causal_features=None):
     filename : str
         Path to save the figure.
     task_label : str
-        'Regression' or 'Classification' for the title.
+        Title label (e.g., 'Regression').
     true_causal_features : list or None
-        Ground-truth causal feature names (only for synthetic data validation).
+        If provided (synthetic validation), colors by ground truth + significance.
+        If None (real data), colors by p-value only.
     """
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -207,7 +266,6 @@ def plot_results(results_df, filename, task_label, true_causal_features=None):
     p_values = results_df["p_value"].values
 
     if true_causal_features is not None:
-        # Demo/validation mode: color by ground truth + significance
         colors = []
         for i, feat in enumerate(features):
             if feat in true_causal_features:
@@ -223,7 +281,6 @@ def plot_results(results_df, filename, task_label, true_causal_features=None):
             Patch(facecolor="lightsteelblue", label="Non-causal (not significant)"),
         ]
     else:
-        # Default mode: color by significance only (for real data)
         colors = []
         for i in range(len(features)):
             if p_values[i] < 0.001:
@@ -257,7 +314,7 @@ def plot_results(results_df, filename, task_label, true_causal_features=None):
     ax.set_yticks(y_pos)
     ax.set_yticklabels(features)
     ax.set_xlabel("Estimated Causal Effect")
-    ax.set_title(f"Conditional Intervention Analysis, {task_label} Task (Consensus of 3 ML Models)")
+    ax.set_title(f"Conditional Intervention Analysis, {task_label}")
     ax.legend(handles=legend_elements, loc="lower right", fontsize=9)
 
     plt.tight_layout()
@@ -267,56 +324,58 @@ def plot_results(results_df, filename, task_label, true_causal_features=None):
 
 
 def run_with_custom_data_example():
-    """
-    Example showing how to use CIA with your own data.
-    Uncomment and modify for your actual dataset.
-    """
+    """Print copy-paste examples for real data."""
     print("\n" + "=" * 70)
-    print("  EXAMPLE: Using CIA with your own data")
+    print("  EXAMPLES: Using CIA with your own data")
     print("=" * 70)
     print("""
-    # --- REGRESSION EXAMPLE ---
+    # --- SMALL DATA (n < 500) ---
     from causal_inference import ConditionalInterventionAnalysis
     from demo_run import plot_results
     import pandas as pd
 
-    X = pd.read_csv("your_features.csv")
-    y = pd.read_csv("your_outcome.csv")["score"]
+    X = pd.read_csv("features.csv")
+    y = pd.read_csv("outcome.csv")["score"]
 
     cia = ConditionalInterventionAnalysis(
-        task_type="regression",       # <-- choose 'regression' or 'classification'
-        n_samples=50,
+        task_type="regression",
+        n_samples=30,
         n_folds=5,
-        model_name="consensus",       # <-- 'consensus' uses 3 models from FIBE
+        model_name="consensus",
         conditional_model="consensus",
         random_state=42,
     )
-    cia.fit(X, y)
+    cia.fit(X, y)                    # feature types auto-detected
     cia.summary()
-    causal = cia.get_causal_features(alpha=0.05)
+    plot_results(cia.get_results(), "causal_effects.png", "Regression")
 
-    # Generate the default figure (colored by significance level)
-    plot_results(cia.get_results(), "my_causal_effects.png", "Regression")
-
-    # --- CLASSIFICATION EXAMPLE ---
-    cia_cls = ConditionalInterventionAnalysis(
-        task_type="classification",
-        n_samples=50,
+    # --- LARGE DATA (e.g., ABCD: ~9000 subjects, ~47 features) ---
+    cia_large = ConditionalInterventionAnalysis(
+        task_type="regression",
+        n_samples=20,
         n_folds=5,
-        model_name="consensus",
+        model_name="consensus_fast",       # Ridge + GBM + RF
+        conditional_model="consensus_fast",
+        max_subjects=300,                  # subsample test subjects per fold
         random_state=42,
     )
-    cia_cls.fit(X, y_binary)
-    cia_cls.summary()
-    plot_results(cia_cls.get_results(), "my_causal_effects_cls.png", "Classification")
+    cia_large.fit(X, y)
+    cia_large.summary()
+    plot_results(cia_large.get_results(), "causal_effects_large.png", "Regression")
 
-    # --- SINGLE MODEL (instead of consensus) ---
-    cia_single = ConditionalInterventionAnalysis(
-        task_type="regression",
-        model_name="RegressionForest",      # just RF
-        conditional_model="gaussianSVR",    # just Gaussian SVR for conditional
+    # --- AFTER FIBE: analyze only selected features ---
+    selected = ["feat1", "feat2", "feat3", ...]
+    cia.fit(data[selected], data["outcome"], feature_names=selected)
+
+    # --- CLASSIFICATION ---
+    cia_cls = ConditionalInterventionAnalysis(
+        task_type="classification",
+        model_name="consensus_fast",
+        max_subjects=300,
+        n_samples=20,
     )
-    cia_single.fit(X, y)
+    cia_cls.fit(X, y_binary)
+    plot_results(cia_cls.get_results(), "causal_effects_cls.png", "Classification")
     """)
 
 
@@ -331,6 +390,8 @@ if __name__ == "__main__":
         run_regression_demo()
     elif task_arg == "classification":
         run_classification_demo()
+    elif task_arg == "large":
+        run_large_dataset_demo()
     else:
         run_regression_demo()
         run_classification_demo()
@@ -339,4 +400,5 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 70)
     print("  All demos complete!")
+    print("  Tip: run  python demo_run.py --task large  for consensus_fast demo")
     print("=" * 70)

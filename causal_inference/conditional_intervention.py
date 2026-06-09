@@ -42,15 +42,24 @@ class ConditionalInterventionAnalysis:
         Number of cross-validation folds for stability estimation.
     model_name : str
         Model selection for outcome prediction.
-        For regression: 'linearSVR', 'gaussianSVR', 'RegressionForest', or 'consensus'.
-        For classification: 'linearSVC', 'gaussianSVC', 'RandomForest', or 'consensus'.
-        Default is 'consensus' (uses all three models).
+        For regression: 'linearSVR', 'gaussianSVR', 'RegressionForest', 'Ridge',
+            'GradientBoosting', 'consensus', or 'consensus_fast'.
+        For classification: 'linearSVC', 'gaussianSVC', 'RandomForest',
+            'LogisticRegression', 'GradientBoosting', 'consensus', or 'consensus_fast'.
+        Default is 'consensus'. Use 'consensus_fast' for large datasets (n > 1000),
+        which replaces SVR/SVC with Ridge/LogisticRegression + GradientBoosting.
     conditional_model : str
         Model for learning P(F_i | F_{-i}). Always regression regardless of task_type.
-        Options: 'linearSVR', 'gaussianSVR', 'RegressionForest', or 'consensus'.
-        Default is 'consensus'.
+        Options: 'linearSVR', 'gaussianSVR', 'RegressionForest', 'Ridge',
+            'GradientBoosting', 'consensus', or 'consensus_fast'.
+        Default is 'consensus'. Use 'consensus_fast' for large datasets.
     confidence_level : float
         Confidence level for effect intervals (default 0.95).
+    max_subjects : int or None
+        Maximum number of test subjects to evaluate per fold. If the test set
+        is larger than this, a random subset is used. This dramatically reduces
+        runtime for large datasets. E.g., set to 500 for datasets with n > 5000.
+        If None (default), all test subjects are used.
     random_state : int or None
         Random seed for reproducibility.
     """
@@ -63,6 +72,7 @@ class ConditionalInterventionAnalysis:
         model_name: str = "consensus",
         conditional_model: str = "consensus",
         confidence_level: float = 0.95,
+        max_subjects: Optional[int] = None,
         random_state: Optional[int] = 42,
     ):
         if task_type not in ("regression", "classification"):
@@ -75,6 +85,7 @@ class ConditionalInterventionAnalysis:
         self.model_name = model_name
         self.conditional_model = conditional_model
         self.confidence_level = confidence_level
+        self.max_subjects = max_subjects
         self.random_state = random_state
         self.results_ = None
         self.feature_names_ = None
@@ -245,18 +256,25 @@ class ConditionalInterventionAnalysis:
 
     def _compute_feature_effect_regression(self, X_test, outcome_models, cond_models, sigma, feature_idx, scaler):
         """
-        Compute interventional effect for regression task.
+        Compute interventional effect for regression task (vectorized).
 
+        Batches all counterfactual predictions into single model calls for speed.
         Measures normalized delta: (ΔO / ΔF) for each counterfactual.
         """
-        all_deltas = []
+        n_test = X_test.shape[0]
 
-        for i in range(X_test.shape[0]):
-            X_subject = X_test[i].copy()
+        # Step 1: Predict original outcomes for all test subjects in one batch
+        O_orig_all, _ = predict_outcome(outcome_models, X_test, "regression")
+
+        # Step 2: For each subject, sample counterfactual values and build batch matrix
+        all_cf_rows = []
+        all_original_values = []
+        all_cf_feature_values = []
+        subject_indices = []
+
+        for i in range(n_test):
+            X_subject = X_test[i]
             original_value = X_subject[feature_idx]
-
-            O_orig, _ = predict_outcome(outcome_models, X_subject.reshape(1, -1), "regression")
-            O_orig = O_orig[0]
 
             cf_values = self._sample_counterfactuals(
                 cond_models, sigma, X_subject, feature_idx, scaler
@@ -265,32 +283,50 @@ class ConditionalInterventionAnalysis:
             for cf_val in cf_values:
                 X_cf = X_subject.copy()
                 X_cf[feature_idx] = cf_val
+                all_cf_rows.append(X_cf)
+                all_original_values.append(original_value)
+                all_cf_feature_values.append(cf_val)
+                subject_indices.append(i)
 
-                O_cf, _ = predict_outcome(outcome_models, X_cf.reshape(1, -1), "regression")
-                O_cf = O_cf[0]
+        if not all_cf_rows:
+            return np.array([])
 
-                delta_O = O_cf - O_orig
-                delta_F = cf_val - original_value
+        # Step 3: Predict all counterfactual outcomes in one batch call
+        X_cf_batch = np.array(all_cf_rows)
+        O_cf_all, _ = predict_outcome(outcome_models, X_cf_batch, "regression")
 
-                if abs(delta_F) > 1e-10:
-                    all_deltas.append(delta_O / delta_F)
+        # Step 4: Compute deltas
+        all_deltas = []
+        for k in range(len(subject_indices)):
+            delta_O = O_cf_all[k] - O_orig_all[subject_indices[k]]
+            delta_F = all_cf_feature_values[k] - all_original_values[k]
+
+            if abs(delta_F) > 1e-10:
+                all_deltas.append(delta_O / delta_F)
 
         return np.array(all_deltas)
 
     def _compute_feature_effect_classification(self, X_test, outcome_models, cond_models, sigma, feature_idx, scaler):
         """
-        Compute interventional effect for classification task.
+        Compute interventional effect for classification task (vectorized).
 
+        Batches all counterfactual predictions into single model calls for speed.
         Uses change in predicted probability (ΔP / ΔF) as the effect measure.
         """
-        all_deltas = []
+        n_test = X_test.shape[0]
 
-        for i in range(X_test.shape[0]):
-            X_subject = X_test[i].copy()
+        # Step 1: Predict original probabilities for all test subjects in one batch
+        _, P_orig_all = predict_outcome(outcome_models, X_test, "classification")
+
+        # Step 2: For each subject, sample counterfactual values and build batch matrix
+        all_cf_rows = []
+        all_original_values = []
+        all_cf_feature_values = []
+        subject_indices = []
+
+        for i in range(n_test):
+            X_subject = X_test[i]
             original_value = X_subject[feature_idx]
-
-            _, P_orig = predict_outcome(outcome_models, X_subject.reshape(1, -1), "classification")
-            P_orig = P_orig[0]
 
             cf_values = self._sample_counterfactuals(
                 cond_models, sigma, X_subject, feature_idx, scaler
@@ -299,15 +335,26 @@ class ConditionalInterventionAnalysis:
             for cf_val in cf_values:
                 X_cf = X_subject.copy()
                 X_cf[feature_idx] = cf_val
+                all_cf_rows.append(X_cf)
+                all_original_values.append(original_value)
+                all_cf_feature_values.append(cf_val)
+                subject_indices.append(i)
 
-                _, P_cf = predict_outcome(outcome_models, X_cf.reshape(1, -1), "classification")
-                P_cf = P_cf[0]
+        if not all_cf_rows:
+            return np.array([])
 
-                delta_P = P_cf - P_orig
-                delta_F = cf_val - original_value
+        # Step 3: Predict all counterfactual probabilities in one batch call
+        X_cf_batch = np.array(all_cf_rows)
+        _, P_cf_all = predict_outcome(outcome_models, X_cf_batch, "classification")
 
-                if abs(delta_F) > 1e-10:
-                    all_deltas.append(delta_P / delta_F)
+        # Step 4: Compute deltas
+        all_deltas = []
+        for k in range(len(subject_indices)):
+            delta_P = P_cf_all[k] - P_orig_all[subject_indices[k]]
+            delta_F = all_cf_feature_values[k] - all_original_values[k]
+
+            if abs(delta_F) > 1e-10:
+                all_deltas.append(delta_P / delta_F)
 
         return np.array(all_deltas)
 
@@ -402,20 +449,41 @@ class ConditionalInterventionAnalysis:
                 model_desc = "consensus (Linear SVR + Gaussian SVR + RF)"
             else:
                 model_desc = "consensus (Linear SVC + Gaussian SVC + RF)"
+        elif self.model_name == "consensus_fast":
+            if self.task_type == "regression":
+                model_desc = "consensus_fast (Ridge + Gradient Boosting + RF)"
+            else:
+                model_desc = "consensus_fast (Logistic Reg + Gradient Boosting + RF)"
+
+        cond_desc = self.conditional_model
+        if self.conditional_model == "consensus_fast":
+            cond_desc = "consensus_fast (Ridge + Gradient Boosting + RF)"
 
         print(f"Running Conditional Intervention Analysis...")
         print(f"  Task type: {self.task_type}")
         print(f"  Subjects: {n_subjects}, Features: {n_features}")
         print(f"  CV Folds: {self.n_folds}, Counterfactual samples: {self.n_samples}")
+        if self.max_subjects:
+            print(f"  Max test subjects per fold: {self.max_subjects}")
         print(f"  Outcome model: {model_desc}")
-        print(f"  Conditional model: {self.conditional_model}")
+        print(f"  Conditional model: {cond_desc}")
         print("-" * 60)
 
         for fold_idx, (train_idx, test_idx) in enumerate(kf.split(X)):
-            print(f"  Fold {fold_idx + 1}/{self.n_folds}...")
-
             X_train, X_test = X[train_idx], X[test_idx]
             y_train, y_test = y[train_idx], y[test_idx]
+
+            # Subsample test subjects if max_subjects is set (for large datasets)
+            if self.max_subjects is not None and X_test.shape[0] > self.max_subjects:
+                rng_sub = np.random.default_rng(self.random_state + fold_idx)
+                sub_idx = rng_sub.choice(X_test.shape[0], self.max_subjects, replace=False)
+                X_test = X_test[sub_idx]
+                n_test_used = self.max_subjects
+            else:
+                n_test_used = X_test.shape[0]
+
+            print(f"  Fold {fold_idx + 1}/{self.n_folds} "
+                  f"(train: {X_train.shape[0]}, test: {n_test_used})...")
 
             scaler = MinMaxScaler()
             X_train_scaled = scaler.fit_transform(X_train)

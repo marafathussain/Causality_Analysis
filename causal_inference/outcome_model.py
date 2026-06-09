@@ -5,13 +5,21 @@ Provides the same consensus of three ML techniques used in FIBE:
   - Regression: Linear SVR, Gaussian SVR, Random Forest Regressor
   - Classification: Linear SVC, Gaussian SVC, Random Forest Classifier
 
+Also provides fast/scalable alternatives for large datasets (n > 1000):
+  - Regression: Ridge, Gradient Boosting, Random Forest
+  - Classification: Logistic Regression, Gradient Boosting, Random Forest
+
 Supports individual models or consensus (averaging for regression,
 majority voting for classification).
 """
 
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.ensemble import (
+    RandomForestRegressor, RandomForestClassifier,
+    GradientBoostingRegressor, GradientBoostingClassifier,
+)
 from sklearn.svm import SVR, SVC
+from sklearn.linear_model import Ridge, LogisticRegression
 from sklearn.metrics import (
     r2_score, mean_squared_error, mean_absolute_error,
     accuracy_score, confusion_matrix,
@@ -50,6 +58,16 @@ def get_models(task_type: str, model_name: str = "consensus", random_state: Opti
                     n_estimators=100, random_state=random_state, max_depth=5
                 ),
             }
+        elif model_name == "consensus_fast":
+            return {
+                "Ridge": Ridge(alpha=1.0),
+                "Gradient Boosting": GradientBoostingRegressor(
+                    n_estimators=100, random_state=random_state, max_depth=5
+                ),
+                "Regression Forest": RandomForestRegressor(
+                    n_estimators=100, random_state=random_state, max_depth=5, n_jobs=-1
+                ),
+            }
         elif model_name == "linearSVR":
             return {"Linear SVR": SVR(kernel="linear", C=1.0, epsilon=0.2)}
         elif model_name == "gaussianSVR":
@@ -57,13 +75,22 @@ def get_models(task_type: str, model_name: str = "consensus", random_state: Opti
         elif model_name == "RegressionForest":
             return {
                 "Regression Forest": RandomForestRegressor(
+                    n_estimators=100, random_state=random_state, max_depth=5, n_jobs=-1
+                )
+            }
+        elif model_name == "Ridge":
+            return {"Ridge": Ridge(alpha=1.0)}
+        elif model_name == "GradientBoosting":
+            return {
+                "Gradient Boosting": GradientBoostingRegressor(
                     n_estimators=100, random_state=random_state, max_depth=5
                 )
             }
         else:
             raise ValueError(
                 f"Unknown model_name '{model_name}' for regression. "
-                f"Choose from 'linearSVR', 'gaussianSVR', 'RegressionForest', or 'consensus'."
+                f"Choose from 'linearSVR', 'gaussianSVR', 'RegressionForest', "
+                f"'Ridge', 'GradientBoosting', 'consensus', or 'consensus_fast'."
             )
 
     elif task_type == "classification":
@@ -75,6 +102,18 @@ def get_models(task_type: str, model_name: str = "consensus", random_state: Opti
                     n_estimators=100, random_state=random_state, max_depth=5
                 ),
             }
+        elif model_name == "consensus_fast":
+            return {
+                "Logistic Regression": LogisticRegression(
+                    max_iter=1000, random_state=random_state
+                ),
+                "Gradient Boosting": GradientBoostingClassifier(
+                    n_estimators=100, random_state=random_state, max_depth=5
+                ),
+                "Random Forest": RandomForestClassifier(
+                    n_estimators=100, random_state=random_state, max_depth=5, n_jobs=-1
+                ),
+            }
         elif model_name == "linearSVC":
             return {"Linear SVC": SVC(kernel="linear", C=1.0, probability=True)}
         elif model_name == "gaussianSVC":
@@ -82,13 +121,26 @@ def get_models(task_type: str, model_name: str = "consensus", random_state: Opti
         elif model_name == "RandomForest":
             return {
                 "Random Forest": RandomForestClassifier(
+                    n_estimators=100, random_state=random_state, max_depth=5, n_jobs=-1
+                )
+            }
+        elif model_name == "LogisticRegression":
+            return {
+                "Logistic Regression": LogisticRegression(
+                    max_iter=1000, random_state=random_state
+                )
+            }
+        elif model_name == "GradientBoosting":
+            return {
+                "Gradient Boosting": GradientBoostingClassifier(
                     n_estimators=100, random_state=random_state, max_depth=5
                 )
             }
         else:
             raise ValueError(
                 f"Unknown model_name '{model_name}' for classification. "
-                f"Choose from 'linearSVC', 'gaussianSVC', 'RandomForest', or 'consensus'."
+                f"Choose from 'linearSVC', 'gaussianSVC', 'RandomForest', "
+                f"'LogisticRegression', 'GradientBoosting', 'consensus', or 'consensus_fast'."
             )
     else:
         raise ValueError(
