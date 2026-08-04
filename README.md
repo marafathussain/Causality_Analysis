@@ -311,6 +311,20 @@ These are not identical without assumptions (no hidden confounders, correct mode
 - Python >= 3.8
 - NumPy, Pandas, scikit-learn, SciPy, Matplotlib
 
+## Citation
+
+If you use this code, please cite our paper:
+
+```bibtex
+@article{hussain2026conditional,
+  title   = {Conditional Intervention Analysis: Toward Identifying Causal Features in Tabular Multimodal Data},
+  author  = {Hussain, Mohammad Arafat and Du, Liyan and Grant, Ellen and Ou, Yangming},
+  booktitle    = {International Workshop on Multimodal Learning with Medical Tabular Data},
+  organization    = {Springer}
+  year   = {2026}
+}
+```
+
 ## License
 
 MIT License
